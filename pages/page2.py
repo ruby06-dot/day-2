@@ -1,3 +1,2 @@
 import streamlit as st
-
-st.write("cute")
+st.write("page2")
