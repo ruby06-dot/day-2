@@ -14,12 +14,17 @@ st.title("Exercise 2-1")
 
 OUTPUT_DIR = "chunks"
 
+MONTHS = (
+    "January|February|March|April|May|June|"
+    "July|August|September|October|November|December"
+)
+
 PRESETS = {
     "Square brackets — [1], [340]": r"(?m)^(?=\s*\[\d+\])",
     "Round brackets — (1), (2)": r"(?m)^(?=\s*\(\d+\))",
-    "Bare numbers — 92 Accordingly": r"(?m)^(?=\s*\d+\s+[A-Z])",
+    "Bare numbers — 92 Accordingly": rf"(?m)^(?=\s*\d+\s+(?!(?:{MONTHS})\b)[A-Z])",
     "Dotted numbers — 1. / 1.1 / 1.1.1": r"(?m)^(?=\s*\d+(?:\.\d+)*\.\s)",
-    "Any numbered style (mixed documents)": r"(?m)^(?=\s*(?:\[\d+\]|\(\d+\)|\d+[\.\)]\s|\d+\s+[A-Z]))",
+    "Any numbered style (mixed documents)": rf"(?m)^(?=\s*(?:\[\d+\]|\(\d+\)|\d+[\.\)]\s|\d+\s+(?!(?:{MONTHS})\b)[A-Z]))",
     "Lettered items — (a), (b), (c)": r"(?m)^(?=\s*\(?[a-z]\))",
     "Articles — Article 1, Article 2": r"(?m)^(?=\s*Article\s+\d+)",
     "Treaty style — Article / Rule / Regulation": r"(?m)^(?=\s*(?:Article|Rule|Regulation|Chapter|Section)\s+\d+)",
@@ -30,12 +35,50 @@ PRESETS = {
 
 
 def clean_text(raw):
+    # Drop lines carrying several control characters (broken font encoding)
+    raw = re.sub(r"(?m)^(?:[^\n]*[\x00-\x08\x0b-\x1f]){3,}[^\n]*$\n?", "", raw)
+    # Strip any remaining stray control characters
+    raw = re.sub(r"[\x00-\x08\x0b-\x1f]", "", raw)
+    # Drop standalone page numbers
+    raw = re.sub(r"(?m)^\s*\d{1,4}\s*$\n?", "", raw)
+    # Rejoin words broken across lines
     raw = re.sub(r"-\n(\w)", r"\1", raw)
     raw = re.sub(r"\n\s*\n", "<<PARA>>", raw)
     raw = re.sub(r"\n(?=\s*(?:\[\d+\]|\(\d+\)|\d+\s+[A-Z]))", "<<PARA>>", raw)
     raw = raw.replace("\n", " ")
     raw = re.sub(r"[ \t]+", " ", raw)
-    return raw.replace("<<PARA>>", "\n\n")
+    raw = re.sub(r"\s+\d{1,4}(?=\n|$)", "", raw)
+    return raw.replace("<<PARA>>", "\n\n").strip()
+
+
+def merge_out_of_sequence(chunks):
+    """Merge chunks whose leading number breaks the ascending sequence."""
+    merged = []
+    last = 0
+    for c in chunks:
+        match = re.match(r"^\s*\[?(\d+)\]?\s", c)
+        number = int(match.group(1)) if match else None
+        if not merged:
+            merged.append(c)
+            if number is not None:
+                last = number
+        elif number is not None and number > last:
+            merged.append(c)
+            last = number
+        else:
+            merged[-1] = merged[-1].rstrip() + " " + c.lstrip()
+    return merged
+
+
+def chunk_label(body, fallback):
+    match = re.match(r"^(\[\d+\]|\d+)(?=\s)", body)
+    if match:
+        tag = match.group(1)
+        preview = body[len(tag):].strip()[:60]
+    else:
+        tag = f"#{fallback}"
+        preview = body[:60]
+    return f"{tag}  {preview}…  ({len(body)} chars)"
 
 
 @st.cache_data(show_spinner=False)
@@ -71,11 +114,11 @@ if saved:
         shutil.rmtree(OUTPUT_DIR)
         st.rerun()
 
-    for path in saved:
+    for n, path in enumerate(saved, start=1):
         with open(path, encoding="utf-8") as f:
             content = f.read()
-        with st.expander(f"{os.path.basename(path)} — {len(content)} chars"):
-            st.write(content)
+        with st.expander(chunk_label(content, n)):
+            st.markdown(content)
 else:
     st.caption("No saved chunks yet.")
 
@@ -121,13 +164,23 @@ if uploaded_file is not None:
         )
         key = choice.rsplit("  (", 1)[0]
         chunks = [c for c in re.split(PRESETS[key], text) if c.strip()]
+
+        if st.checkbox("Merge numbers that break the sequence", value=True):
+            before = len(chunks)
+            chunks = merge_out_of_sequence(chunks)
+            if before != len(chunks):
+                st.caption(f"Merged {before - len(chunks)} false splits")
+
         if len(chunks) <= 1:
             st.warning("No match found. Try another style.")
 
-    st.write(f"{len(chunks)} chunks")
+    cleaned_chunks = [clean_text(c) for c in chunks]
+    cleaned_chunks = [c for c in cleaned_chunks if c.strip()]
 
-    if chunks:
-        sizes = sorted(len(c) for c in chunks)
+    st.write(f"{len(cleaned_chunks)} chunks")
+
+    if cleaned_chunks:
+        sizes = sorted(len(c) for c in cleaned_chunks)
         st.caption(
             f"Largest {sizes[-1]} chars · median {sizes[len(sizes) // 2]} chars"
         )
@@ -141,15 +194,14 @@ if uploaded_file is not None:
             shutil.rmtree(OUTPUT_DIR)
         os.makedirs(OUTPUT_DIR)
 
-        for n, c in enumerate(chunks, start=1):
+        for n, c in enumerate(cleaned_chunks, start=1):
             path = os.path.join(OUTPUT_DIR, f"chunk_{n:03d}.txt")
             with open(path, "w", encoding="utf-8") as f:
-                f.write(clean_text(c).strip())
+                f.write(c)
 
-        st.success(f"Saved {len(chunks)} chunks")
+        st.success(f"Saved {len(cleaned_chunks)} chunks")
         st.rerun()
 
-    for i, c in enumerate(chunks):
-        preview = clean_text(c).strip()[:40]
-        with st.expander(f"Chunk {i+1} ({len(c)} chars) — {preview}"):
-            st.markdown(clean_text(c))
+    for n, c in enumerate(cleaned_chunks, start=1):
+        with st.expander(chunk_label(c, n)):
+            st.markdown(c)
