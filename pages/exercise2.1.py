@@ -1,6 +1,8 @@
 import streamlit as st
 import re
 import os
+import glob
+import shutil
 from pypdf import PdfReader
 from openai import OpenAI
 from dotenv import load_dotenv
@@ -9,6 +11,8 @@ load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 st.title("Exercise 2-1")
+
+OUTPUT_DIR = "chunks"
 
 PRESETS = {
     "Numbered paragraphs (1, 2, 3...)": r"(?m)^(?=\d+\s+[A-Z])",
@@ -51,6 +55,28 @@ def summarise(content):
 
 uploaded_file = st.file_uploader("Choose a PDF file", type="pdf")
 
+st.divider()
+
+st.subheader("Saved chunks")
+saved = sorted(glob.glob(f"{OUTPUT_DIR}/chunk_*.txt"))
+
+if saved:
+    st.write(f"{len(saved)} chunks on disk")
+
+    if st.button("Clear saved chunks"):
+        shutil.rmtree(OUTPUT_DIR)
+        st.rerun()
+
+    for path in saved:
+        with open(path, encoding="utf-8") as f:
+            content = f.read()
+        with st.expander(f"{os.path.basename(path)} — {len(content)} chars"):
+            st.write(content)
+else:
+    st.caption("No saved chunks yet.")
+
+st.divider()
+
 if uploaded_file is not None:
     reader = PdfReader(uploaded_file)
     st.write(f"Pages: {len(reader.pages)}")
@@ -87,6 +113,19 @@ if uploaded_file is not None:
             st.warning("No match found. Try another structure.")
 
     st.write(f"{len(chunks)} chunks")
+
+    if st.button("Save chunks to disk"):
+        if os.path.exists(OUTPUT_DIR):
+            shutil.rmtree(OUTPUT_DIR)
+        os.makedirs(OUTPUT_DIR)
+
+        for n, c in enumerate(chunks, start=1):
+            path = os.path.join(OUTPUT_DIR, f"chunk_{n:03d}.txt")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(clean_text(c).strip())
+
+        st.success(f"Saved {len(chunks)} chunks")
+        st.rerun()
 
     for i, c in enumerate(chunks):
         preview = clean_text(c).strip()[:40]
