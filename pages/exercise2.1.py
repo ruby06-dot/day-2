@@ -15,12 +15,16 @@ st.title("Exercise 2-1")
 OUTPUT_DIR = "chunks"
 
 PRESETS = {
-    "Numbered paragraphs (1, 2, 3...)": r"(?m)^(?=\d+\s+[A-Z])",
-    "Numbered clauses (1. / 1.1 / 1.1.1)": r"(?m)^(?=\s*\d+(?:\.\d+)*\.?\s)",
-    "Articles (Article 1, Article 2...)": r"(?m)^(?=\s*Article\s+\d+)",
-    "Sections (Section 1 / § 1)": r"(?m)^(?=\s*(?:Section\s+\d+|§\s*\d+))",
+    "Square brackets — [1], [340]": r"(?m)^(?=\s*\[\d+\])",
+    "Round brackets — (1), (2)": r"(?m)^(?=\s*\(\d+\))",
+    "Bare numbers — 92 Accordingly": r"(?m)^(?=\s*\d+\s+[A-Z])",
+    "Dotted numbers — 1. / 1.1 / 1.1.1": r"(?m)^(?=\s*\d+(?:\.\d+)*\.\s)",
+    "Any numbered style (mixed documents)": r"(?m)^(?=\s*(?:\[\d+\]|\(\d+\)|\d+[\.\)]\s|\d+\s+[A-Z]))",
+    "Lettered items — (a), (b), (c)": r"(?m)^(?=\s*\(?[a-z]\))",
+    "Articles — Article 1, Article 2": r"(?m)^(?=\s*Article\s+\d+)",
+    "Treaty style — Article / Rule / Regulation": r"(?m)^(?=\s*(?:Article|Rule|Regulation|Chapter|Section)\s+\d+)",
+    "Sections — Section 1 / § 1": r"(?m)^(?=\s*(?:Section\s+\d+|§\s*\d+))",
     "Chapters or Parts": r"(?m)^(?=\s*(?:CHAPTER|Chapter|PART|Part)\s+[IVXLC\d]+)",
-    "Lettered items ((a), (b), (c)...)": r"(?m)^(?=\s*\(?[a-z]\))",
     "ALL CAPS headings": r"(?m)^(?=[A-Z][A-Z\s]{4,}$)",
 }
 
@@ -28,7 +32,7 @@ PRESETS = {
 def clean_text(raw):
     raw = re.sub(r"-\n(\w)", r"\1", raw)
     raw = re.sub(r"\n\s*\n", "<<PARA>>", raw)
-    raw = re.sub(r"\n(?=\d+\s+[A-Z])", "<<PARA>>", raw)
+    raw = re.sub(r"\n(?=\s*(?:\[\d+\]|\(\d+\)|\d+\s+[A-Z]))", "<<PARA>>", raw)
     raw = raw.replace("\n", " ")
     raw = re.sub(r"[ \t]+", " ", raw)
     return raw.replace("<<PARA>>", "\n\n")
@@ -107,12 +111,30 @@ if uploaded_file is not None:
         chunks = [c for c in re.split(r"\n\s*\n", cleaned) if c.strip()]
 
     else:
-        choice = st.selectbox("Document structure", list(PRESETS.keys()))
-        chunks = [c for c in re.split(PRESETS[choice], text) if c.strip()]
+        counts = {k: len(re.findall(v, text)) for k, v in PRESETS.items()}
+        labels = [f"{k}  ({counts[k]} matches)" for k in PRESETS]
+        best = max(counts, key=counts.get)
+        choice = st.selectbox(
+            "Numbering style",
+            labels,
+            index=list(PRESETS).index(best),
+        )
+        key = choice.rsplit("  (", 1)[0]
+        chunks = [c for c in re.split(PRESETS[key], text) if c.strip()]
         if len(chunks) <= 1:
-            st.warning("No match found. Try another structure.")
+            st.warning("No match found. Try another style.")
 
     st.write(f"{len(chunks)} chunks")
+
+    if chunks:
+        sizes = sorted(len(c) for c in chunks)
+        st.caption(
+            f"Largest {sizes[-1]} chars · median {sizes[len(sizes) // 2]} chars"
+        )
+        if sizes[-1] > 30000:
+            st.warning(
+                "One chunk exceeds the embedding limit. Try a different style."
+            )
 
     if st.button("Save chunks to disk"):
         if os.path.exists(OUTPUT_DIR):

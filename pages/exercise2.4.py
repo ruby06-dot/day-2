@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import chromadb
@@ -9,11 +10,10 @@ from openai import OpenAI
 project_folder = Path(__file__).resolve().parents[1]
 load_dotenv(project_folder / ".env")
 
-import os
-
 client = OpenAI()
 
-TOP_K = 10
+CHAT_MODEL = "gpt-4o-mini"
+EMBED_MODEL = "text-embedding-3-large"
 DB_PATH = str(project_folder / "chroma_db")
 COLLECTION_NAME = "document_chunks"
 
@@ -37,7 +37,7 @@ def get_collection():
     db = chromadb.PersistentClient(path=DB_PATH)
     embedder = embedding_functions.OpenAIEmbeddingFunction(
         api_key=os.getenv("OPENAI_API_KEY"),
-        model_name="text-embedding-3-large",
+        model_name=EMBED_MODEL,
     )
     return db.get_or_create_collection(
         name=COLLECTION_NAME,
@@ -77,6 +77,12 @@ st.divider()
 
 question = st.text_input("Ask a question about the document:")
 
+col_1, col_2 = st.columns(2)
+with col_1:
+    top_k = st.slider("Chunks to retrieve", 1, 20, 10)
+with col_2:
+    max_distance = st.slider("Max distance", 0.0, 2.0, 2.0, 0.05)
+
 if st.button("Ask document"):
     if not question.strip():
         st.warning("Please enter a question.")
@@ -86,16 +92,27 @@ if st.button("Ask document"):
             with st.spinner("Searching the document..."):
                 results = collection.query(
                     query_texts=[question],
-                    n_results=TOP_K,
+                    n_results=top_k,
                 )
 
                 documents = results["documents"][0]
                 ids = results["ids"][0]
                 distances = results["distances"][0]
 
-                excerpts = "\n\n".join(
-                    f"[{name}]\n{doc}" for name, doc in zip(ids, documents)
-                )
+                kept = [
+                    (name, doc, dist)
+                    for name, doc, dist in zip(ids, documents, distances)
+                    if dist <= max_distance
+                ]
+
+                if not kept:
+                    st.warning(
+                        f"No chunk is within distance {max_distance}. "
+                        f"Closest was {min(distances):.3f}."
+                    )
+                    st.stop()
+
+                excerpts = "\n\n".join(f"[{name}]\n{doc}" for name, doc, _ in kept)
 
                 prompt = f"""
 Answer the user's question using only the document excerpts below.
@@ -113,16 +130,18 @@ Rules:
   "I cannot find the answer in the retrieved document sections."
 """
 
-                answer_response = client.responses.create(
-                    model="gpt-4o",
-                    input=prompt,
+                answer_response = client.chat.completions.create(
+                    model=CHAT_MODEL,
+                    max_tokens=800,
+                    messages=[{"role": "user", "content": prompt}],
                 )
 
             st.subheader("Answer")
-            st.write(answer_response.output_text)
+            st.write(answer_response.choices[0].message.content)
 
             st.subheader("Retrieved sources")
-            for name, doc, dist in zip(ids, documents, distances):
+            st.caption(f"{len(kept)} of {len(ids)} chunks passed the distance filter")
+            for name, doc, dist in kept:
                 with st.expander(f"{name} — distance {dist:.3f}"):
                     st.write(doc)
 
